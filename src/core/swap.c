@@ -273,6 +273,18 @@ static int swap_add_default_dependencies(Swap *s) {
                                                 /* add_reference= */ true, UNIT_DEPENDENCY_DEFAULT);
                 if (r < 0)
                         return r;
+
+                /* Leave swap files to systemd-shutdown, which swaps off after the final kill when little is
+                 * left to page back in. Soft-reboot never runs it, so that still has to stop them. */
+                if (p && p->what && !is_device_path(p->what)) {
+                        r = unit_add_dependency_by_name(UNIT(s), UNIT_CONFLICTS, SPECIAL_SOFT_REBOOT_TARGET,
+                                                        /* add_reference= */ true, UNIT_DEPENDENCY_DEFAULT);
+                        if (r < 0)
+                                return r;
+
+                        return unit_add_dependency_by_name(UNIT(s), UNIT_BEFORE, SPECIAL_UMOUNT_TARGET,
+                                                           /* add_reference= */ true, UNIT_DEPENDENCY_DEFAULT);
+                }
         }
 
         return unit_add_two_dependencies_by_name(UNIT(s), UNIT_BEFORE, UNIT_CONFLICTS, SPECIAL_UMOUNT_TARGET,

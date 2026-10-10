@@ -3,14 +3,20 @@
   Copyright © 2010 ProFUSION embedded systems
 ***/
 
+#include <fcntl.h>
 #include <sys/swap.h>
+#include <unistd.h>
 
 #include "alloc-util.h"
+#include "constants.h"
 #include "detach-swap.h"
 #include "errno-util.h"
+#include "fd-util.h"
 #include "libmount-util.h"
 #include "list.h"
 #include "log.h"
+#include "pidref.h"
+#include "process-util.h"
 
 static void swap_device_free(SwapDevice **head, SwapDevice *m) {
         assert(head);
@@ -80,6 +86,44 @@ int swap_list_get(const char *swaps, SwapDevice **head) {
         return 0;
 }
 
+static int swapoff_with_timeout(const char *path) {
+        _cleanup_close_pair_ int pfd[2] = EBADF_PAIR;
+        _cleanup_(pidref_done_sigkill_nowait) PidRef pidref = PIDREF_NULL;
+        int r;
+
+        assert(path);
+
+        if (pipe2(pfd, O_CLOEXEC|O_NONBLOCK) < 0)
+                return -errno;
+
+        /* swapoff() pages everything back in first, which can take arbitrarily long. */
+        r = pidref_safe_fork_full("(sd-swapoff)",
+                                  /* stdio_fds= */ NULL,
+                                  pfd, ELEMENTSOF(pfd),
+                                  FORK_RESET_SIGNALS|FORK_CLOSE_ALL_FDS|FORK_LOG|FORK_REOPEN_LOG, &pidref);
+        if (r < 0)
+                return r;
+        if (r == 0) {
+                pfd[0] = safe_close(pfd[0]);
+                report_errno_and_exit(pfd[1], RET_NERRNO(swapoff(path)));
+        }
+
+        pfd[1] = safe_close(pfd[1]);
+
+        siginfo_t si;
+        r = pidref_wait_for_terminate_full(&pidref, DEFAULT_TIMEOUT_USEC, &si);
+        if (r < 0)
+                return r;
+
+        pidref_done(&pidref);
+
+        if (si.si_code == CLD_EXITED && si.si_status == 0)
+                return 0;
+
+        r = read_errno(pfd[0]);
+        return r < 0 && r != -EIO ? r : -EPROTO;
+}
+
 static int swap_points_list_off(SwapDevice **head, bool *changed) {
         int n_failed = 0, r;
 
@@ -88,7 +132,7 @@ static int swap_points_list_off(SwapDevice **head, bool *changed) {
 
         LIST_FOREACH(swap_device, m, *head) {
                 log_info("Deactivating swap %s.", m->path);
-                r = RET_NERRNO(swapoff(m->path));
+                r = swapoff_with_timeout(m->path);
                 if (ERRNO_IS_NEG_DEVICE_ABSENT(r))
                         log_debug_errno(r, "Tried to deactivate swap '%s', but swap disappeared by now, ignoring: %m", m->path);
                 else if (r < 0) {
