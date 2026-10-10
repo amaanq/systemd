@@ -94,6 +94,14 @@
         <varname>Before=</varname> dependency on <filename>umount.target</filename> so that they are deactivated at
         shutdown as well as a <varname>Before=swap.target</varname> dependency.</para></listitem>
 
+        <listitem><para>Local swap files get no <varname>Conflicts=</varname> dependency on
+        <filename>umount.target</filename>, only the <varname>Before=</varname> one, plus a
+        <varname>Conflicts=</varname> dependency on <filename>soft-reboot.target</filename>. At shutdown they
+        are deactivated by
+        <citerefentry><refentrytitle>systemd-shutdown</refentrytitle><manvolnum>8</manvolnum></citerefentry>
+        after the remaining processes have been killed, unless a mount unit they require is stopped earlier,
+        in which case they are stopped together with it.</para></listitem>
+
         <listitem><para>Network swap units (those with <option>_netdev</option> in their options) automatically acquire
         <varname>After=</varname> dependencies on <filename>remote-fs-pre.target</filename> and
         <filename>network.target</filename>, plus <varname>After=</varname> and <varname>Wants=</varname> dependencies
